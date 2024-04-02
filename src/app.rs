@@ -52,6 +52,7 @@ struct History {
     hist: Vec<String>,
     index: usize,
 }
+
 impl History {
     fn new() -> Self {
         Self {
@@ -210,24 +211,24 @@ impl<'a> App {
                             }
                         }
                         KeyCode::Char('c')
-                            if key.modifiers == KeyModifiers::from_name("CONTROL").unwrap() =>
-                        {
-                            if input_tx.send("stop\n".to_string()).is_err() {
-                                self.output.push("Couldn't stop!".to_string());
-                            }
-                            if exitspam.len() == 3 {
-                                if let Some(time) = exitspam.pop_back() {
-                                    if Instant::now() - time <= Duration::new(3, 0) {
-                                        input_tx.send("EXIT".to_string()).expect("Couldn't exit!");
-                                        break;
-                                    } else {
-                                        exitspam.push_front(Instant::now());
-                                    }
+                        if key.modifiers == KeyModifiers::from_name("CONTROL").unwrap() =>
+                            {
+                                if input_tx.send("stop\n".to_string()).is_err() {
+                                    self.output.push("Couldn't stop!".to_string());
                                 }
-                            } else {
-                                exitspam.push_front(Instant::now());
+                                if exitspam.len() == 3 {
+                                    if let Some(time) = exitspam.pop_back() {
+                                        if Instant::now() - time <= Duration::new(3, 0) {
+                                            input_tx.send("EXIT".to_string()).expect("Couldn't exit!");
+                                            break;
+                                        } else {
+                                            exitspam.push_front(Instant::now());
+                                        }
+                                    }
+                                } else {
+                                    exitspam.push_front(Instant::now());
+                                }
                             }
-                        }
                         KeyCode::Char(c) => self.put_char(c),
                         KeyCode::Backspace => self.delete_char(),
                         KeyCode::Up => self.input = self.cmd_history.prev_cmd(),
@@ -290,8 +291,8 @@ impl<'a> App {
         );
     }
 
+    /// restore terminal
     fn shutdown(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
-        // restore terminal
         disable_raw_mode()?;
         execute!(
             terminal.backend_mut(),

@@ -6,7 +6,7 @@ use crate::output;
 
 async fn detect_port(ports: &mut Vec<SerialPortInfo>) -> Option<String> {
     loop {
-        tokio::time::delay_for(std::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         if let Ok(new_ports) = available_ports() {
             for path in &new_ports {
