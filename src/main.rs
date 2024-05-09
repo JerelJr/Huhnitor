@@ -25,8 +25,7 @@ async fn monitor(
     let input_clone = input_tx.clone();
 
     std::thread::spawn(|| input::receiver(input_clone));
-
-
+    
     let tty_path = if cmd_port.is_some() {
         cmd_port
     } else if auto {
@@ -36,7 +35,12 @@ async fn monitor(
     };
 
     if let Some(inner_tty_path) = tty_path {
-        let settings = tokio_serial::new(&inner_tty_path, 115200).data_bits(DataBits::Eight).flow_control(FlowControl::None).parity(Parity::None).stop_bits(StopBits::One).timeout(Duration::from_secs(10));
+        let settings = tokio_serial::new(&inner_tty_path, 115200)
+            .data_bits(DataBits::Eight)
+            .flow_control(FlowControl::None)
+            .parity(Parity::None)
+            .stop_bits(StopBits::One)
+            .timeout(Duration::from_secs(10));
         #[allow(unused_mut)] // Ignore warning from windows compilers
         if let Ok(mut port) = tokio_serial::SerialStream::open(&settings) {
             #[cfg(unix)]

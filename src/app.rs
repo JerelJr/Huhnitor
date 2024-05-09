@@ -1,7 +1,6 @@
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseEventKind,
+        self, Event, KeyCode, KeyEventKind, KeyModifiers,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -21,6 +20,7 @@ use std::{
     io::{self, Stdout},
     time::{Duration, Instant},
 };
+use std::io::ErrorKind;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 lazy_static::lazy_static! {
@@ -48,6 +48,30 @@ lazy_static::lazy_static! {
         (Color::Yellow, Modifier::empty()), // command [-arg <value>] [-flag]
     ];
 }
+
+struct InterruptHandler(VecDeque<Instant>);
+
+impl InterruptHandler {
+    fn new(cap: usize) -> Self {
+        Self(VecDeque::with_capacity(cap))
+    }
+    fn interrupted(&mut self) -> bool {
+        if self.0.len() == 3 {
+            if let Some(time) = self.0.pop_back() {
+                if Instant::now() - time <= Duration::new(3, 0) {
+                    true
+                } else {
+                    self.0.push_front(Instant::now());
+                    false
+                }
+            } else { false }
+        } else {
+            self.0.push_front(Instant::now());
+            false
+        }
+    }
+}
+
 struct History {
     hist: Vec<String>,
     index: usize,
@@ -80,6 +104,11 @@ impl History {
     }
 }
 
+enum InputMode {
+    Normal,
+    Insert,
+}
+
 /// App holds the state of the application
 pub struct App {
     /// Current value of the input box
@@ -88,11 +117,16 @@ pub struct App {
     output: Vec<String>,
     /// History of commands entered
     cmd_history: History,
+    /// User-controlled scrolling
+    manual_scroll: bool,
     /// Scrollbar State
-    scroll_state: ScrollbarState,
+    scrollbar: ScrollbarState,
+    /// Scroll position
     scroll_pos: usize,
     /// Cursor Position
     cursor_pos: usize,
+    /// Input Mode
+    input_mode: InputMode,
 }
 
 impl<'a> App {
@@ -101,9 +135,11 @@ impl<'a> App {
             input: String::default(),
             output: Vec::new(),
             cmd_history: History::new(),
-            scroll_state: ScrollbarState::default(),
+            manual_scroll: false,
+            scrollbar: ScrollbarState::default(),
             scroll_pos: 0,
             cursor_pos: 0,
+            input_mode: InputMode::Insert,
         }
     }
 
@@ -143,12 +179,13 @@ impl<'a> App {
 
     fn scroll_up(&mut self) {
         self.scroll_pos = self.scroll_pos.saturating_sub(1);
-        self.scroll_state = self.scroll_state.position(self.scroll_pos);
+        self.scrollbar = self.scrollbar.position(self.scroll_pos);
+        self.manual_scroll = true;
     }
 
     fn scroll_down(&mut self) {
         self.scroll_pos = self.scroll_pos.saturating_add(1);
-        self.scroll_state = self.scroll_state.position(self.scroll_pos);
+        self.scrollbar = self.scrollbar.position(self.scroll_pos);
     }
 
     fn remove_char(&mut self, idx: usize) {
@@ -175,22 +212,24 @@ impl<'a> App {
         )
     }
 
+    /// Start render loop
     pub async fn run(
         mut self,
         input_tx: UnboundedSender<String>,
         mut output_rx: UnboundedReceiver<String>,
         tick_rate: Duration,
     ) -> io::Result<()> {
-        let mut exitspam: VecDeque<Instant> = VecDeque::with_capacity(3);
+        let mut spam_handler = InterruptHandler::new(3);
         let stdout = io::stdout();
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
         let mut prev_tick = Instant::now();
+        let mut res: io::Result<()> = Ok(());
 
         // setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnableMouseCapture, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen)?;
 
         loop {
             terminal.draw(|f| self.ui(f))?;
@@ -201,58 +240,68 @@ impl<'a> App {
 
             let timeout = tick_rate.saturating_sub(prev_tick.elapsed());
             if event::poll(timeout)? {
-                match event::read()? {
-                    Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                        KeyCode::Enter => {
-                            let entr_txt: String = self.submit();
-                            input_tx.send(format!("{}\r\n", entr_txt.clone())).unwrap();
-                            if entr_txt.to_uppercase() == "EXIT" {
-                                break;
-                            }
-                        }
-                        KeyCode::Char('c')
-                        if key.modifiers == KeyModifiers::from_name("CONTROL").unwrap() =>
-                            {
-                                if input_tx.send("stop\n".to_string()).is_err() {
-                                    self.output.push("Couldn't stop!".to_string());
-                                }
-                                if exitspam.len() == 3 {
-                                    if let Some(time) = exitspam.pop_back() {
-                                        if Instant::now() - time <= Duration::new(3, 0) {
-                                            input_tx.send("EXIT".to_string()).expect("Couldn't exit!");
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == KeyEventKind::Press {
+                        match self.input_mode {
+                            InputMode::Insert => {
+                                match key.code {
+                                    KeyCode::Enter => {
+                                        let entr_txt: String = self.submit();
+                                        input_tx.send(format!("{}\r\n", entr_txt.clone())).unwrap();
+                                        if entr_txt.to_uppercase() == "EXIT" {
                                             break;
-                                        } else {
-                                            exitspam.push_front(Instant::now());
                                         }
                                     }
-                                } else {
-                                    exitspam.push_front(Instant::now());
+                                    KeyCode::Char('c')
+                                    if key.modifiers == KeyModifiers::from_name("CONTROL").unwrap() =>
+                                        {
+                                            if input_tx.send("stop\n".to_string()).is_err() {
+                                                self.output.push("Couldn't stop!".to_string());
+                                            }
+                                            if spam_handler.interrupted() {
+                                                res = input_tx.send("EXIT".to_string()).map_err(|e| io::Error::new(ErrorKind::Other, e.0));
+                                                break;
+                                            }
+                                        }
+                                    KeyCode::Char(c) => self.put_char(c),
+                                    KeyCode::Backspace => self.delete_char(),
+                                    KeyCode::Up => {
+                                        self.input = self.cmd_history.prev_cmd();
+                                        self.cursor_pos = self.input.len();
+                                    }
+                                    KeyCode::Down => {
+                                        self.input = self.cmd_history.next_cmd();
+                                        self.cursor_pos = self.input.len();
+                                    }
+                                    KeyCode::Left => self.cursor_left(),
+                                    KeyCode::Right => self.cursor_right(),
+                                    KeyCode::PageUp => self.scroll_up(),
+                                    KeyCode::PageDown => self.scroll_down(),
+                                    KeyCode::Esc => self.input_mode = InputMode::Normal,
+
+                                    _ => (),
                                 }
                             }
-                        KeyCode::Char(c) => self.put_char(c),
-                        KeyCode::Backspace => self.delete_char(),
-                        KeyCode::Up => self.input = self.cmd_history.prev_cmd(),
-                        KeyCode::Down => self.input = self.cmd_history.next_cmd(),
-                        KeyCode::Left => self.cursor_left(),
-                        KeyCode::Right => self.cursor_right(),
-                        KeyCode::PageUp => self.scroll_up(),
-                        KeyCode::PageDown => self.scroll_down(),
-
-                        _ => (),
-                    },
-                    Event::Mouse(me) => match me.kind {
-                        MouseEventKind::ScrollUp => self.scroll_up(),
-                        MouseEventKind::ScrollDown => self.scroll_down(),
-                        _ => (),
-                    },
-                    _ => (),
+                            InputMode::Normal => {
+                                match key.code {
+                                    KeyCode::Up | KeyCode::PageUp => self.scroll_up(),
+                                    KeyCode::Down | KeyCode::PageDown => self.scroll_down(),
+                                    KeyCode::Char('e') => self.input_mode = InputMode::Insert,
+                                    _ => ()
+                                }
+                            }
+                        }
+                    }
                 }
             }
+
             if prev_tick.elapsed() >= tick_rate {
                 prev_tick = Instant::now();
             }
         }
-        Self::shutdown(terminal)
+        Self::shutdown(terminal)?;
+
+        res
     }
 
     fn ui(&mut self, f: &mut Frame) {
@@ -262,11 +311,25 @@ impl<'a> App {
             .constraints([Constraint::Min(1), Constraint::Length(3)].as_ref())
             .split(f.size());
 
-        // Message Box
+        let (msg_color, input_color) = match self.input_mode {
+            InputMode::Insert => (Color::Yellow, Color::White),
+            InputMode::Normal => (Color::White, Color::Yellow)
+        };
+
+        // Set scroll position
         let lines: Vec<Line> = self.output.iter().map(Self::parse).collect();
-        self.scroll_state = self.scroll_state.content_length(lines.len());
+        let box_height = chunks[0].height as usize;
+        let visible_len = (lines.len() as isize - box_height as isize + 2).clamp(0, lines.len() as isize);
+        if !self.manual_scroll {
+            self.scroll_pos = visible_len as usize;
+        } else if self.scroll_pos >= visible_len as usize {
+            self.manual_scroll = false;
+        }
+        self.scrollbar = self.scrollbar.content_length(lines.len());
+
+        // Message Box
         let messages = Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL).title("Messages"))
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(msg_color)).title("Messages"))
             .scroll((self.scroll_pos as u16, 0));
         f.render_widget(messages, chunks[0]);
         f.render_stateful_widget(
@@ -274,13 +337,13 @@ impl<'a> App {
                 .begin_symbol(Some("^"))
                 .end_symbol(Some("v")),
             chunks[0],
-            &mut self.scroll_state,
+            &mut self.scrollbar,
         );
 
         // Input Box
         let input = Paragraph::new(self.input.as_str())
             .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Input"));
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(input_color)).title("Input"));
         f.render_widget(input, chunks[1]);
         // Show cursor
         f.set_cursor(
@@ -296,7 +359,6 @@ impl<'a> App {
         disable_raw_mode()?;
         execute!(
             terminal.backend_mut(),
-            DisableMouseCapture,
             LeaveAlternateScreen
         )?;
         terminal.show_cursor()?;
