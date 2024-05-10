@@ -10,7 +10,7 @@ async fn detect_port(ports: &mut Vec<SerialPortInfo>) -> Option<String> {
 
         if let Ok(new_ports) = available_ports() {
             for path in &new_ports {
-                if !ports.contains(&path) {
+                if !ports.contains(path) {
                     return Some(path.port_name.clone());
                 }
             }

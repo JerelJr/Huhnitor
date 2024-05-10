@@ -12,7 +12,7 @@ macro_rules! error {
 // Statically compile regex to avoid repetetive compiling
 // Rust Regex can be tested here: https://rustexp.lpil.uk/
 lazy_static::lazy_static! {
-    static ref REGSET: RegexSet = RegexSet::new(&[
+    static ref REGSET: RegexSet = RegexSet::new([
         r"^(\x60|\.|:|/|-|\+|o|s|h|d|y| ){50,}",      // ASCII Chicken
         r"^# ",                                       // # command
         r"(?m)^\s*(-|=|#)+\s*$",                      // ================
@@ -77,7 +77,7 @@ pub struct Preferences {
 impl Preferences {
     pub fn print(&self, s: &str) {
         if self.color_enabled {
-            parse(&s);
+            parse(s);
         } else {
             print!("{}", s);
         }

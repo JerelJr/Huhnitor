@@ -286,7 +286,7 @@ impl<'a> App {
                                 match key.code {
                                     KeyCode::Up | KeyCode::PageUp => self.scroll_up(),
                                     KeyCode::Down | KeyCode::PageDown => self.scroll_down(),
-                                    KeyCode::Char('e') => self.input_mode = InputMode::Insert,
+                                    KeyCode::Esc => self.input_mode = InputMode::Insert,
                                     _ => ()
                                 }
                             }

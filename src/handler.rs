@@ -7,7 +7,7 @@ pub fn handle(command: String) -> String {
     let words = command.split(' ').collect::<Vec<&str>>();
     let len = words.len();
     if let Some(key) = words.get(1) {
-        match key.to_uppercase().trim().as_ref() {
+        match key.to_uppercase().trim() {
             "READ" => {
                 if len > 2 {
                     let mut out = String::new();

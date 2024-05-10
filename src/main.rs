@@ -25,7 +25,7 @@ async fn monitor(
     let input_clone = input_tx.clone();
 
     std::thread::spawn(|| input::receiver(input_clone));
-    
+
     let tty_path = if cmd_port.is_some() {
         cmd_port
     } else if auto {
@@ -51,10 +51,8 @@ async fn monitor(
 
             out.connected(&inner_tty_path);
 
-            if !no_welcome {
-                if let Err(_) = port.write("welcome\r\n".as_bytes()).await {
-                    out.print("Couldn't send welcome command!");
-                }
+            if !no_welcome && port.write("welcome\r\n".as_bytes()).await.is_err() {
+                out.print("Couldn't send welcome command!");
             }
 
             tokio::spawn(async move { app.run(input_tx, output_rx, Duration::from_millis(15)).await });
@@ -140,7 +138,7 @@ async fn main() {
     if args.driver {
         out.driver();
     } else {
-        let mut app = app::App::new();
+        let app = App::new();
         monitor(args.port, !args.auto, args.no_welcome, &out, app).await;
     }
 
