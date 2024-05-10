@@ -49,24 +49,27 @@ lazy_static::lazy_static! {
     ];
 }
 
-struct InterruptHandler(VecDeque<Instant>);
+struct InterruptHandler {
+    spam: VecDeque<Instant>,
+    cap: usize,
+}
 
 impl InterruptHandler {
     fn new(cap: usize) -> Self {
-        Self(VecDeque::with_capacity(cap))
+        Self { spam: VecDeque::with_capacity(cap), cap }
     }
     fn interrupted(&mut self) -> bool {
-        if self.0.len() == 3 {
-            if let Some(time) = self.0.pop_back() {
+        if self.spam.len() == self.cap {
+            if let Some(time) = self.spam.pop_back() {
                 if Instant::now() - time <= Duration::new(3, 0) {
                     true
                 } else {
-                    self.0.push_front(Instant::now());
+                    self.spam.push_front(Instant::now());
                     false
                 }
             } else { false }
         } else {
-            self.0.push_front(Instant::now());
+            self.spam.push_front(Instant::now());
             false
         }
     }
@@ -219,7 +222,7 @@ impl<'a> App {
         mut output_rx: UnboundedReceiver<String>,
         tick_rate: Duration,
     ) -> io::Result<()> {
-        let mut spam_handler = InterruptHandler::new(3);
+        let mut spam_handler = InterruptHandler::new(2);
         let stdout = io::stdout();
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
