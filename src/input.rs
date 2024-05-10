@@ -10,7 +10,7 @@ pub fn receiver(sender: UnboundedSender<String>) {
 
     match rl.readline(">> ") {
         Ok(line) => {
-            rl.add_history_entry(&line).expect("TODO: panic message");
+            rl.add_history_entry(&line).expect("Unable to add history entry");
             if sender.send(format!("{}\r\n", line.clone())).is_err() {
                 error!("Couldn't report input to main thread!");
             }
