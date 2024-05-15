@@ -21,6 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 use std::io::ErrorKind;
+use crossterm::event::KeyEvent;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 lazy_static::lazy_static! {
@@ -107,6 +108,7 @@ impl History {
     }
 }
 
+#[derive(PartialEq)]
 enum InputMode {
     Normal,
     Insert,
@@ -215,6 +217,58 @@ impl<'a> App {
         )
     }
 
+    fn event_handler(&mut self, key: KeyEvent, spam_handler: &mut InterruptHandler, input_tx: &UnboundedSender<String>) -> io::Result<bool> {
+        if key.kind == KeyEventKind::Press && self.input_mode == InputMode::Insert {
+            match key.code {
+                KeyCode::Enter => {
+                    let entr_txt: String = self.submit();
+                    input_tx.send(format!("{}\r\n", entr_txt.clone())).unwrap();
+                    if entr_txt.to_uppercase() == "EXIT" {
+                        return Ok(false);
+                    }
+                }
+                KeyCode::Char('c')
+                if key.modifiers == KeyModifiers::from_name("CONTROL").unwrap() => {
+                    if input_tx.send("stop\n".to_string()).is_err() {
+                        self.output.push("Couldn't stop!".to_string());
+                    }
+                    if spam_handler.interrupted() {
+                        let res: io::Result<bool> = match input_tx.send("EXIT".to_string()) {
+                            Ok(_) => Ok(false),
+                            Err(e) => Err(io::Error::new(ErrorKind::Other, e.0))
+                        };
+                        return res;
+                    }
+                }
+                KeyCode::Char(c) => self.put_char(c),
+                KeyCode::Backspace => self.delete_char(),
+                KeyCode::Up => {
+                    self.input = self.cmd_history.prev_cmd();
+                    self.cursor_pos = self.input.len();
+                }
+                KeyCode::Down => {
+                    self.input = self.cmd_history.next_cmd();
+                    self.cursor_pos = self.input.len();
+                }
+                KeyCode::Left => self.cursor_left(),
+                KeyCode::Right => self.cursor_right(),
+                KeyCode::PageUp => self.scroll_up(),
+                KeyCode::PageDown => self.scroll_down(),
+                KeyCode::Esc => self.input_mode = InputMode::Normal,
+
+                _ => (),
+            }
+        } else if key.kind == KeyEventKind::Press && self.input_mode == InputMode::Normal {
+            match key.code {
+                KeyCode::Up | KeyCode::PageUp => self.scroll_up(),
+                KeyCode::Down | KeyCode::PageDown => self.scroll_down(),
+                KeyCode::Esc => self.input_mode = InputMode::Insert,
+                _ => ()
+            }
+        }
+        Ok(true)
+    }
+
     /// Start render loop
     pub async fn run(
         mut self,
@@ -244,56 +298,13 @@ impl<'a> App {
             let timeout = tick_rate.saturating_sub(prev_tick.elapsed());
             if event::poll(timeout)? {
                 if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        match self.input_mode {
-                            InputMode::Insert => {
-                                match key.code {
-                                    KeyCode::Enter => {
-                                        let entr_txt: String = self.submit();
-                                        input_tx.send(format!("{}\r\n", entr_txt.clone())).unwrap();
-                                        if entr_txt.to_uppercase() == "EXIT" {
-                                            break;
-                                        }
-                                    }
-                                    KeyCode::Char('c')
-                                    if key.modifiers == KeyModifiers::from_name("CONTROL").unwrap() =>
-                                        {
-                                            if input_tx.send("stop\n".to_string()).is_err() {
-                                                self.output.push("Couldn't stop!".to_string());
-                                            }
-                                            if spam_handler.interrupted() {
-                                                res = input_tx.send("EXIT".to_string()).map_err(|e| io::Error::new(ErrorKind::Other, e.0));
-                                                break;
-                                            }
-                                        }
-                                    KeyCode::Char(c) => self.put_char(c),
-                                    KeyCode::Backspace => self.delete_char(),
-                                    KeyCode::Up => {
-                                        self.input = self.cmd_history.prev_cmd();
-                                        self.cursor_pos = self.input.len();
-                                    }
-                                    KeyCode::Down => {
-                                        self.input = self.cmd_history.next_cmd();
-                                        self.cursor_pos = self.input.len();
-                                    }
-                                    KeyCode::Left => self.cursor_left(),
-                                    KeyCode::Right => self.cursor_right(),
-                                    KeyCode::PageUp => self.scroll_up(),
-                                    KeyCode::PageDown => self.scroll_down(),
-                                    KeyCode::Esc => self.input_mode = InputMode::Normal,
-
-                                    _ => (),
-                                }
-                            }
-                            InputMode::Normal => {
-                                match key.code {
-                                    KeyCode::Up | KeyCode::PageUp => self.scroll_up(),
-                                    KeyCode::Down | KeyCode::PageDown => self.scroll_down(),
-                                    KeyCode::Esc => self.input_mode = InputMode::Insert,
-                                    _ => ()
-                                }
-                            }
+                    match self.event_handler(key, &mut spam_handler, &input_tx) {
+                        Ok(false) => break,
+                        Err(e) => {
+                            res = Err(e);
+                            break;
                         }
+                        _ => ()
                     }
                 }
             }
